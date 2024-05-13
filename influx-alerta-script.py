@@ -37,13 +37,12 @@ def create_table():
                 alertID TEXT NOT NULL UNIQUE,
                 lastReceiveID TEXT,
                 receiveTime TEXT,
-                updateTime TEXT,
+                lastReceiveTime TEXT,
                 customer TEXT,
                 event TEXT,
                 resource TEXT,
                 duplicateCount INTEGER DEFAULT 0,
-                isPushed BOOLEAN DEFAULT FALSE,
-                overRide BOOLEAN DEFAULT FALSE
+                isPushed BOOLEAN DEFAULT FALSE
             );
         ''')
         conn.commit()
@@ -55,7 +54,12 @@ def get_alerts():
         logging.debug(f"Status Code: {response.status_code}")
         logging.debug(f"Response Content: {response.text}")
         response.raise_for_status()
-        return response.json().get('alerts', [])
+
+        data = response.json()
+        open_alerts = [alert for alert in data.get('alerts', []) if alert.get('status') == 'open']
+
+        return open_alerts
+
     except requests.RequestException as e:
         logging.error(f"Request failed: {e}")
         return []
@@ -74,14 +78,14 @@ def update_db_with_alerts(alerts):
                 conn.execute('''
                             UPDATE alerts SET
                                 lastReceiveID=?,
-                                updateTime=?,
+                                lastReceiveTime=?,
                                 duplicateCount=duplicateCount+1,
-                                isPushed=?
+                                isPushed=0
                             WHERE alertID=?;
-                        ''', (last_receive_id, last_receive_time, alert_id, '0'))
+                        ''', (last_receive_id, last_receive_time, alert_id))
             else:
                 conn.execute('''
-                            INSERT INTO alerts (alertID, receiveTime, updateTime ,customer, event, resource, duplicateCount)
+                            INSERT INTO alerts (alertID, receiveTime, lastReceiveTime ,customer, event, resource, duplicateCount)
                             VALUES (?, ?, ?, ?, ?, ?, ?);
                         ''', (
                     alert_id, receive_time, receive_time, alert.get('customer', ''), alert.get('event', ''),
@@ -99,8 +103,8 @@ def send_to_influxdb():
                 .tag("customer", row['customer']) \
                 .tag("event", row['event']) \
                 .tag("resource", row['resource']) \
-                .tag("last_receive_time", datetime.fromisoformat(row['updateTime'].rstrip('Z')).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]) \
-                .time(int(parser.parse(row['receiveTime']).timestamp() * 1e9), WritePrecision.NS)
+                .tag("create_time", datetime.fromisoformat(row['receiveTime'].rstrip('Z')).replace(tzinfo=pytz.utc).astimezone(pytz.timezone('Etc/GMT-3')).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]) \
+                .time(int(parser.parse(row['lastReceiveTime']).timestamp() * 1e9), WritePrecision.NS)
             points.append(point)
         if points:
             write_api.write(bucket=bucket, record=points)
