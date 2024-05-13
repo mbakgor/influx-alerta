@@ -8,7 +8,7 @@ import sqlite3
 from influxdb_client.client.write_api import SYNCHRONOUS
 from dateutil import parser
 
-bucket = "alerta/90_day"
+bucket = "YourBucket"
 org = "YourOrg"
 token = "YourTokenHere"
 influxdb_url = "influx-url"
@@ -42,10 +42,13 @@ def create_table():
                 event TEXT,
                 resource TEXT,
                 duplicateCount INTEGER DEFAULT 0,
-                isPushed BOOLEAN DEFAULT FALSE
+                isPushed BOOLEAN DEFAULT FALSE,
+                overRide BOOLEAN DEFAULT FALSE
             );
         ''')
         conn.commit()
+
+
 def get_alerts():
     try:
         response = requests.get(alerta_url, headers=headers)
@@ -72,14 +75,17 @@ def update_db_with_alerts(alerts):
                             UPDATE alerts SET
                                 lastReceiveID=?,
                                 updateTime=?,
-                                duplicateCount=duplicateCount+1
+                                duplicateCount=duplicateCount+1,
+                                isPushed=?
                             WHERE alertID=?;
-                        ''', (last_receive_id, last_receive_time, alert_id))
+                        ''', (last_receive_id, last_receive_time, alert_id, '0'))
             else:
                 conn.execute('''
-                            INSERT INTO alerts (alertID, receiveTime, customer, event, resource)
-                            VALUES (?, ?, ?, ?, ?);
-                        ''', (alert_id, receive_time, alert.get('customer', ''), alert.get('event', ''), alert.get('resource', '')))
+                            INSERT INTO alerts (alertID, receiveTime, updateTime ,customer, event, resource, duplicateCount)
+                            VALUES (?, ?, ?, ?, ?, ?, ?);
+                        ''', (
+                    alert_id, receive_time, receive_time, alert.get('customer', ''), alert.get('event', ''),
+                    alert.get('resource', ''), '1'))
         conn.commit()
 
 
@@ -93,7 +99,7 @@ def send_to_influxdb():
                 .tag("customer", row['customer']) \
                 .tag("event", row['event']) \
                 .tag("resource", row['resource']) \
-                .tag("id", row['alertID']) \
+                .tag("last_receive_time", datetime.fromisoformat(row['updateTime'].rstrip('Z')).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]) \
                 .time(int(parser.parse(row['receiveTime']).timestamp() * 1e9), WritePrecision.NS)
             points.append(point)
         if points:
